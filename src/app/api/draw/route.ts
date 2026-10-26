@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { Participant, DrawSession } from '@/lib/types';
 import { generateDraw } from '@/lib/draw';
 import { saveDrawSession } from '@/lib/storage';
+import { encodeRevealToken } from '@/lib/token';
 
 export async function POST(req: NextRequest) {
   try {
@@ -47,20 +48,40 @@ export async function POST(req: NextRequest) {
     }
 
     // Run draw algorithm
-    const pairs = generateDraw(sanitizedParticipants);
+    const rawPairs = generateDraw(sanitizedParticipants);
+
+    const cleanTitle = title.trim() || 'Secret Santa';
+    const cleanBudget = budget?.trim();
+    const cleanMessage = message?.trim();
+
+    // Attach stateless encrypted token to each pair (works 100% reliably on Vercel)
+    const pairs = rawPairs.map((pair) => {
+      const encryptedToken = encodeRevealToken({
+        sessionTitle: cleanTitle,
+        budget: cleanBudget,
+        message: cleanMessage,
+        giverName: pair.giverName,
+        receiverName: pair.receiverName,
+        pairId: pair.token || crypto.randomUUID(),
+      });
+      return {
+        ...pair,
+        token: encryptedToken,
+      };
+    });
 
     const sessionId = crypto.randomUUID();
     const session: DrawSession = {
       id: sessionId,
-      title: title.trim() || 'Secret Santa',
-      budget: budget?.trim(),
-      message: message?.trim(),
+      title: cleanTitle,
+      budget: cleanBudget,
+      message: cleanMessage,
       createdAt: new Date().toISOString(),
       participants: sanitizedParticipants,
       pairs,
     };
 
-    // Save session in server storage
+    // Save session in server storage (non-blocking on Vercel)
     await saveDrawSession(session);
 
     // Build response for admin: giver info + token (receiverName is NOT exposed to client)
